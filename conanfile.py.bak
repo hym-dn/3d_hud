@@ -1,0 +1,419 @@
+#!/usr/bin/env python3
+"""
+@file conanfile.py
+@brief Conan package configuration for 3D HUD Engine
+@author HUD Engine Team
+@version 1.0.0
+@license MIT
+
+Cross-platform 3D HUD rendering engine with multi-display and multi-viewport support.
+This Conan package provides a flexible build system for the HUD engine across multiple
+platforms including Windows, Linux, Android, and QNX.
+"""
+
+from conan import ConanFile
+from conan.tools.cmake import CMake, CMakeToolchain, CMakeDeps, cmake_layout
+from conan.tools.build import check_min_cppstd
+from conan.tools.scm import Version
+from conan.errors import ConanInvalidConfiguration
+import os
+
+
+class A3DHudConan(ConanFile):
+    """
+    @class A3DHudConan
+    @brief Conan package configuration for 3D HUD Engine
+
+    This class defines the build configuration, dependencies, and platform-specific
+    settings for the 3D HUD rendering engine package.
+    """
+
+    # Package metadata
+    name = "3D HUD"  # Package name
+    version = "1.0.0"  # Package version
+    license = "MIT"  # Software license
+    author = "HUD Engine Team"  # Author information
+    # url = "https://github.com/your-org/hud-engine"  # Project URL (commented)
+    description = "Cross-platform 3D HUD rendering engine with multi-display and multi-viewport support"
+    topics = ("hud", "rendering", "3d", "opengl", "egl", "cross-platform")
+
+    # Package configuration
+    package_type = "library"  # Package type (library)
+    settings = "os", "compiler", "build_type", "arch"  # Build settings
+
+    # Configuration options
+    options = {
+        "shared": [True, False],  # Build as shared library
+        "fPIC": [True, False],  # Position Independent Code
+        "with_opengl": [True, False],  # Enable OpenGL support
+        "with_vulkan": [True, False],  # Enable Vulkan support
+        "with_egl": [True, False],  # Enable EGL support
+        "with_tests": [True, False],  # Build test suite
+        "with_examples": [True, False],  # Build examples
+    }
+
+    # Default option values
+    default_options = {
+        "shared": False,  # Static library by default
+        "fPIC": True,  # Position Independent Code enabled
+        "with_opengl": True,  # OpenGL support enabled
+        "with_vulkan": False,  # Vulkan support disabled
+        "with_egl": True,  # EGL support enabled
+        "with_tests": True,  # Test suite enabled
+        "with_examples": True,  # Examples enabled
+    }
+
+    # Source files to export
+    exports_sources = "CMakeLists.txt", "src/*", "examples/*", "tests/*"
+
+    # Build system generators - use legacy generator for better compatibility
+    generators = "CMakeToolchain", "CMakeDeps"
+    
+    def config_options(self):
+        """
+        @brief Configure platform-specific options
+
+        Adjusts build options based on the target operating system.
+        This method is called automatically by Conan during configuration.
+
+        @details
+        - Windows: Disables fPIC and EGL support (uses native WGL)
+        - Linux/Android/QNX: Enables EGL support for optimal performance
+        """
+        if self.settings.os == "Windows":
+            del self.options.fPIC
+            self.options.with_egl = False
+        elif self.settings.os in ["Linux", "Android", "Neutrino"]:
+            self.options.with_egl = True
+
+    def configure(self):
+        """
+        @brief Configure package dependencies and options
+
+        Adjusts package configuration based on selected options.
+        Called automatically by Conan after config_options().
+
+        @details
+        - Removes fPIC option when building shared libraries
+        """
+        if self.options.shared:
+            self.options.rm_safe("fPIC")
+
+        # Configure freetype with PNG support
+        if hasattr(self, "dependencies") and "freetype" in self.dependencies:
+            self.dependencies["freetype"].options.with_png = True
+            self.dependencies["freetype"].options.with_bzip2 = True
+            
+        # # Disable build tools to avoid downloading cmake
+        # if hasattr(self, "dependencies"):
+        #     for dep_name in ["libpng", "bzip2", "freetype", "zlib"]:
+        #         if dep_name in self.dependencies:
+        #             # Disable build tools for these dependencies
+        #             self.dependencies[dep_name].options.shared = False
+            
+        # # Disable build tools to avoid downloading cmake
+        # if hasattr(self, "dependencies"):
+        #     for dep_name in ["libpng", "bzip2", "freetype", "zlib"]:
+        #         if dep_name in self.dependencies:
+        #             # Disable build tools for these dependencies
+        #             self.dependencies[dep_name].options.shared = False
+
+    def layout(self):
+        """
+        @brief Define the build directory layout
+
+        Configures the directory structure for the build process.
+        Uses CMake's standard layout conventions.
+        """
+        cmake_layout(self)
+        
+        # Override generator directories to use current directory instead of nested structure
+        self.folders.generators = "conan"
+        self.folders.build = "build"
+
+    def requirements(self):
+        """
+        @brief Define package dependencies
+
+        Specifies all required dependencies for the HUD engine.
+        Dependencies are resolved automatically by Conan during build.
+
+        @details Core dependencies:
+        - glad: OpenGL extension loading library
+        - glm: OpenGL Mathematics library
+        - stb: Single-file public domain libraries for graphics
+        - freetype: Font rendering library
+        - fmt: Formatting library for C++
+        - spdlog: Fast logging library
+
+        @details Optional dependencies based on build options:
+        - OpenGL/Vulkan graphics APIs
+        - Platform-specific EGL implementations
+        - Google Test for unit testing
+        """
+        # Core graphics and utility libraries
+        self.requires("glad/2.0.8")  # OpenGL extension loader (保持最新)
+        self.requires("glm/1.0.1")  # Mathematics library (保持最新)
+        self.requires("stb/cci.20240531")  # Image loading utilities (保持最新)
+        self.requires("fmt/12.0.0")  # String formatting (升级到最新稳定版)
+        self.requires("spdlog/1.16.0")  # Logging system (保持最新)
+
+        # # Font rendering with dependencies - use transitive to ensure proper linking
+        # self.requires(
+        #     "libpng/1.6.51", transitive_headers=True, transitive_libs=True
+        # )  # PNG support (升级到最新稳定版)
+        # self.requires(
+        #     "bzip2/1.0.8", transitive_headers=True, transitive_libs=True
+        # )  # bzip2 support (保持最新)
+        # self.requires("freetype/2.14.1")  # Font rendering (保持最新)
+
+        # Graphics API dependencies
+        if self.options.with_opengl:
+            self.requires("opengl/system")  # OpenGL system library
+        if self.options.with_vulkan:
+            self.requires("vulkan-loader/1.4.313.0")  # Vulkan loader
+            self.requires("vulkan-headers/1.4.313.0")  # Vulkan headers
+
+        # Platform-specific EGL dependencies
+        if self.options.with_egl:
+            if self.settings.os == "Linux":
+                self.requires("egl/system")  # EGL implementation
+                self.requires("xorg/system")  # X11 window system
+            elif self.settings.os == "Android":
+                self.requires("android-ndk/r25c")  # Android NDK
+            elif self.settings.os == "Neutrino":
+                self.requires("qnx-egl/system")  # QNX EGL implementation
+
+        # Testing framework
+        if self.options.with_tests:
+            self.requires("gtest/1.17.0")  # Google Test framework
+
+    def validate(self):
+        """
+        @brief Validate build configuration
+
+        Performs validation checks on the build configuration to ensure
+        compatibility and prevent invalid configurations.
+
+        @throws ConanInvalidConfiguration if validation fails
+
+        @details Validation checks:
+        - C++ standard version (C++17 required)
+        - Platform-specific feature compatibility
+        - Compiler version requirements
+        """
+        # Set C++17 if not specified
+        if not self.settings.compiler.get_safe("cppstd"):
+            self.settings.compiler.cppstd = "17"
+
+        # Check C++ standard requirement
+        check_min_cppstd(self, "17")
+
+        # Platform-specific validation
+        if self.settings.os == "Windows":
+            if self.options.with_egl:
+                raise ConanInvalidConfiguration("EGL is not supported on Windows")
+
+        if self.settings.os in ["Linux", "Android", "Neutrino"]:
+            if not self.options.with_egl:
+                self.output.warning(
+                    "EGL is recommended for Linux/Android/QNX platforms"
+                )
+
+        # Compiler version validation
+        compiler = self.settings.compiler
+        if compiler == "gcc":
+            if Version(compiler.version) < "10":
+                raise ConanInvalidConfiguration("GCC 10 or newer is required")
+        elif compiler == "clang":
+            if Version(compiler.version) < "12":
+                raise ConanInvalidConfiguration("Clang 12 or newer is required")
+        elif compiler == "msvc":
+            if Version(compiler.version) < "192":
+                raise ConanInvalidConfiguration("MSVC 2019 or newer is required")
+
+    def build_requirements(self):
+        """
+        @brief Define build tool requirements
+
+        Specifies tools required for the build process.
+        These are tools used during compilation, not runtime dependencies.
+
+        @details Build tools:
+        - CMake 3.20+: Build system
+        - Platform-specific toolchains (Android NDK, QNX SDP)
+        """
+        # Build system requirement
+        # self.tool_requires("cmake/[>=3.20]")  # CMake build system
+
+        # Platform-specific build tools
+        if self.settings.os == "Android":
+            self.tool_requires("android-ndk/r25c")  # Android Native Development Kit
+        elif self.settings.os == "Neutrino":
+            self.tool_requires("qnx-sdp/7.1")  # QNX Software Development Platform
+            
+    def build(self):
+        """
+        @brief Execute the build process
+
+        Performs the actual compilation of the HUD engine.
+        This method is called automatically by Conan during package building.
+
+        @details Build steps:
+        - Configure CMake project
+        - Build the library and optional components
+        - Run tests if enabled
+        """
+        cmake = CMake(self)
+        cmake.configure()  # Configure CMake project
+        cmake.build()  # Build the library
+
+        # Run tests if enabled
+        if self.options.with_tests:
+            cmake.test()
+
+    def package(self):
+        """
+        @brief Create the final package
+
+        Installs the built artifacts into the package directory.
+        This method is called automatically by Conan after building.
+
+        @details Package contents:
+        - Compiled libraries (.a, .so, .dll)
+        - Header files
+        - CMake configuration files
+        """
+        cmake = CMake(self)
+        cmake.install()  # Install built artifacts
+
+    def package_info(self):
+        """
+        @brief Define package information for consumers
+
+        Provides metadata about the built package that consumers need
+        to properly link against and use the HUD engine library.
+
+        @details Package information includes:
+        - Library names and directories
+        - System library dependencies
+        - Compiler definitions
+        - CMake target names
+        """
+        # Library name
+        self.cpp_info.libs = ["hud_engine"]
+
+        # Include directories
+        self.cpp_info.includedirs = ["include"]
+
+        # Platform-specific system libraries
+        if self.settings.os == "Windows":
+            self.cpp_info.system_libs = ["opengl32", "gdi32", "user32"]
+        elif self.settings.os == "Linux":
+            self.cpp_info.system_libs = ["GL", "EGL", "X11", "dl", "pthread"]
+        elif self.settings.os == "Android":
+            self.cpp_info.system_libs = ["GLESv2", "EGL", "android", "log"]
+        elif self.settings.os == "Neutrino":
+            self.cpp_info.system_libs = ["GLESv2", "EGL", "screen"]
+
+        # Compiler definitions
+        self.cpp_info.defines = ["HUD_ENGINE_EXPORTS"]
+
+        # CMake integration
+        self.cpp_info.set_property("cmake_target_name", "hud_engine::hud_engine")
+
+        # Binary and library directories
+        if self.settings.os == "Windows":
+            self.cpp_info.bindirs = ["bin"]
+        else:
+            self.cpp_info.bindirs = ["bin"]
+            self.cpp_info.libdirs = ["lib"]
+
+    def package_id(self):
+        """
+        @brief Customize package ID generation
+
+        Controls how the package ID is calculated based on configuration options.
+        This affects package caching and dependency resolution.
+
+        @details Package ID includes:
+        - EGL support option
+        - OpenGL support option
+        - Vulkan support option
+        """
+        # In Conan 2.x, options are automatically included in package_id
+        # No need to manually set them unless customizing the ID
+
+    def deploy(self):
+        """
+        @brief Deploy package artifacts
+
+        Copies runtime dependencies and artifacts to deployment directories.
+        This method is used when deploying the package to a target environment.
+
+        @details Deployment artifacts:
+        - Executable binaries
+        - Shared libraries
+        - Header files
+        """
+        # Copy runtime dependencies
+        self.copy("*", dst="bin", src="bin")  # Binary files
+        self.copy("*", dst="lib", src="lib")  # Library files
+        self.copy("*", dst="include", src="include")  # Header files
+
+
+def create_package(conanfile_path):
+    """
+    @brief Create a package creator instance
+
+    Factory function for creating package instances programmatically.
+
+    @param conanfile_path Path to the Conan file
+    @return PackageCreator instance
+
+    @details
+    This function provides a programmatic way to create packages
+    outside of the standard Conan command-line interface.
+    """
+    from conans import ConanFile
+
+    class PackageCreator(ConanFile):
+        """
+        @class PackageCreator
+        @brief Package creator class for programmatic package creation
+        """
+
+        settings = "os", "compiler", "build_type", "arch"
+
+        def build(self):
+            """
+            @brief Execute the package creation process
+
+            Runs the Conan create command to build and package the library.
+            """
+            self.run(f"conan create {conanfile_path}")
+
+    return PackageCreator()
+
+
+if __name__ == "__main__":
+    """
+    @brief Main entry point for standalone execution
+
+    Provides command-line interface for package testing and information display.
+    """
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "test":
+        # Test the package creation process
+        os.system("conan create . --build=missing")
+    else:
+        # Display package information
+        print("HUD Engine Conan Package Configuration:")
+        print("- Multi-platform support: Windows, Linux, Android, QNX")
+        print("- Graphics APIs: OpenGL, Vulkan (optional)")
+        print("- Windowing: EGL-based cross-platform windowing")
+        print("- Features: Multi-display, multi-viewport support")
+        print("\nUsage:")
+        print("  conan create . --build=missing")
+        print("  conan install . --build=missing")

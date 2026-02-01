@@ -1,0 +1,547 @@
+#!/usr/bin/env python3
+"""
+3D HUD Rendering Engine Cross-Platform Build Script
+Supports Windows, Linux, Android, QNX platforms
+Based on existing conanfile.py build script
+"""
+
+import os
+import sys
+import platform
+import subprocess
+import argparse
+from pathlib import Path
+
+def detect_platform():
+    """Detect current platform"""
+    system = platform.system().lower()
+    if system == "windows":
+        return "windows"
+    elif system == "linux":
+        return "linux"
+    elif system == "darwin":
+        return "macos"
+    else:
+        return "unknown"
+
+
+def check_android_prerequisites():
+    """Check Android build prerequisites"""
+    android_ndk_home = os.environ.get("ANDROID_NDK_HOME")
+    if not android_ndk_home:
+        print("Error: Please set ANDROID_NDK_HOME environment variable")
+        return False
+
+    if not os.path.exists(android_ndk_home):
+        print("Error: ANDROID_NDK_HOME path does not exist")
+        return False
+
+    print(f"Android NDK path: {android_ndk_home}")
+    return True
+
+
+def check_qnx_prerequisites():
+    """Check QNX build prerequisites"""
+    qnx_sdp_home = os.environ.get("QNX_SDP_HOME")
+    if not qnx_sdp_home:
+        print("Error: Please set QNX_SDP_HOME environment variable")
+        return False
+
+    if not os.path.exists(qnx_sdp_home):
+        print("Error: QNX_SDP_HOME path does not exist")
+        return False
+
+    print(f"QNX SDP path: {qnx_sdp_home}")
+    return True
+
+
+def check_prerequisites(target_platform=None):
+    """Check build prerequisites"""
+    print("Checking build prerequisites...")
+
+    # 检查Conan
+    try:
+        result = subprocess.run(["conan", "--version"], capture_output=True, text=True)
+        if result.returncode != 0:
+            print("Error: Conan not installed or not in PATH")
+            return False
+        print(f"Conan version: {result.stdout.strip()}")
+    except FileNotFoundError:
+        print("Error: Conan not installed")
+        return False
+
+    # 检查CMake
+    try:
+        result = subprocess.run(["cmake", "--version"], capture_output=True, text=True)
+        if result.returncode != 0:
+            print("Error: CMake not installed or not in PATH")
+            return False
+        print(f"CMake version: {result.stdout.split(' ')[2].strip()}")
+    except FileNotFoundError:
+        print("Error: CMake not installed")
+        return False
+
+    # Platform-specific checks
+    if target_platform == "android":
+        if not check_android_prerequisites():
+            return False
+    elif target_platform == "qnx":
+        if not check_qnx_prerequisites():
+            return False
+
+    print("Prerequisites check completed")
+    return True
+
+
+def build_for_windows(
+    project_root, conan_dir, build_dir, build_type, arch=None, verbose=False
+):
+    """Windows platform build"""
+    print("Building Windows version...")
+
+    if not arch:
+        arch = "x86_64"
+
+    cmd = [
+        "conan",
+        "install",
+        ".",
+        #"--output-folder",
+        #str(conan_dir),
+        "--build",
+        "missing",
+        "-s",
+        "os=Windows",
+        "-s",
+        f"arch={arch}",
+        "-s",
+        "compiler=msvc",
+        "-s",
+        "compiler.version=193",
+        "-s",
+        f"compiler.cppstd=17"
+    ]
+    if verbose:
+        cmd.append("--verbose")
+
+    result = subprocess.run(cmd, cwd=project_root)
+    if result.returncode != 0:
+        print("Error: Conan installation failed")
+        return False
+
+    toolchain_file = conan_dir / "conan_toolchain.cmake"
+
+    cmd = [
+        "cmake",
+        "-S",
+        ".",
+        "-B",
+        "build",
+        "-G",
+        "Visual Studio 17 2022",
+        f"-DCMAKE_TOOLCHAIN_FILE={toolchain_file}",
+        f"-DCMAKE_PREFIX_PATH={conan_dir}",
+        f"-DCMAKE_BUILD_TYPE={build_type}",
+        f"-DCMAKE_CXX_STANDARD=17"
+    ]
+    if arch == "x86":
+        cmd.extend(["-A", "Win32"])
+    elif arch == "x86_64":
+        cmd.extend(["-A", "x64"])
+    elif arch == "armv8":
+        cmd.extend(["-A", "ARM64"])
+
+    if verbose:
+        cmd.append("--verbose")
+
+    result = subprocess.run(cmd, cwd=project_root)
+    if result.returncode != 0:
+        print("Error: CMake configuration failed")
+        return False
+
+    # Build project
+    cmd = ["cmake", "--build", "build", "--config", build_type]
+    if verbose:
+        cmd.append("--verbose")
+
+    result = subprocess.run(cmd, cwd=project_root)
+    if result.returncode != 0:
+        print("Error: Build failed")
+        return False
+
+    return True
+
+
+def build_for_linux(
+    project_root, conan_dir, build_dir, build_type, arch=None, verbose=False
+):
+    """Linux platform build"""
+    print("Building Linux version...")
+
+    # Default architecture
+    if not arch:
+        arch = "x86_64"
+
+    # Use conanfile.py to install dependencies
+    cmd = [
+        "conan",
+        "install",
+        ".",
+        "--output-folder",
+        str(conan_dir),
+        "--build",
+        "missing",
+        "-s",
+        "os=Linux",
+        "-s",
+        f"arch={arch}",
+        "-s",
+        "compiler=gcc",
+        "-s",
+        "compiler.version=11",
+        "-s",
+        f"compiler.cppstd=17",
+    ]
+    if verbose:
+        cmd.append("--verbose")
+
+    result = subprocess.run(cmd, cwd=project_root)
+    if result.returncode != 0:
+        print("Error: Conan installation failed")
+        return False
+
+    # Configure CMake project
+    cmd = [
+        "cmake",
+        "-S",
+        ".",
+        "-B",
+        "build",
+        f"-DCMAKE_BUILD_TYPE={build_type}",
+        f"-DCMAKE_PREFIX_PATH={conan_dir}",
+    ]
+
+    # Set cross-compilation toolchain (if non-x86_64 architecture is specified)
+    if arch != "x86_64":
+        if arch == "x86":
+            cmd.extend(["-DCMAKE_C_FLAGS=-m32", "-DCMAKE_CXX_FLAGS=-m32"])
+        elif arch == "armv7":
+            cmd.extend(["-DCMAKE_TOOLCHAIN_FILE=cmake/arm-linux-gnueabihf.cmake"])
+        elif arch == "armv8":
+            cmd.extend(["-DCMAKE_TOOLCHAIN_FILE=cmake/aarch64-linux-gnu.cmake"])
+
+    if verbose:
+        cmd.append("--verbose")
+
+    result = subprocess.run(cmd, cwd=project_root)
+    if result.returncode != 0:
+        print("Error: CMake configuration failed")
+        return False
+
+    # Build project
+    import multiprocessing
+
+    jobs = multiprocessing.cpu_count()
+    cmd = ["cmake", "--build", "build", "-j", str(jobs)]
+    if verbose:
+        cmd.append("--verbose")
+
+    result = subprocess.run(cmd, cwd=project_root)
+    if result.returncode != 0:
+        print("Error: Build failed")
+        return False
+
+    return True
+
+
+def build_for_android(
+    project_root, conan_dir, build_dir, build_type, arch=None, verbose=False
+):
+    """Android platform build"""
+    print("Building Android version...")
+
+    android_ndk_home = os.environ.get("ANDROID_NDK_HOME")
+    android_build_dir = build_dir / "android"
+    android_build_dir.mkdir(exist_ok=True)
+
+    # Default architecture
+    if not arch:
+        arch = "armv8"
+
+    # Map architecture to Android ABI
+    arch_to_abi = {
+        "armv7": "armeabi-v7a",
+        "armv8": "arm64-v8a",
+        "x86": "x86",
+        "x86_64": "x86_64",
+    }
+
+    if arch not in arch_to_abi:
+        print(f"Error: Unsupported Android architecture: {arch}")
+        return False
+
+    android_abi = arch_to_abi[arch]
+
+    # Use conanfile.py to install dependencies
+    cmd = [
+        "conan",
+        "install",
+        ".",
+        "--output-folder",
+        str(conan_dir),
+        "--build",
+        "missing",
+        "-s",
+        "os=Android",
+        "-s",
+        f"arch={arch}",
+        "-s",
+        "compiler=clang",
+        "-s",
+        "compiler.version=12",
+        "-s",
+        f"compiler.cppstd=17",
+    ]
+    if verbose:
+        cmd.append("--verbose")
+
+    result = subprocess.run(cmd, cwd=project_root)
+    if result.returncode != 0:
+        print("Error: Conan installation failed")
+        return False
+
+    # Configure Android project
+    cmd = [
+        "cmake",
+        "-S",
+        ".",
+        "-B",
+        "build/android",
+        f"-DCMAKE_TOOLCHAIN_FILE={android_ndk_home}/build/cmake/android.toolchain.cmake",
+        f"-DANDROID_ABI={android_abi}",
+        "-DANDROID_PLATFORM=android-24",
+        f"-DCMAKE_BUILD_TYPE={build_type}",
+        "-DHUD_ENGINE_PLATFORM_ANDROID=ON",
+        "-DHUD_ENGINE_USE_EGL=ON",
+        f"-DCMAKE_PREFIX_PATH={conan_dir}"
+    ]
+    if verbose:
+        cmd.append("--verbose")
+
+    result = subprocess.run(cmd, cwd=project_root)
+    if result.returncode != 0:
+        print("Error: Android CMake configuration failed")
+        return False
+
+    # Build Android project
+    cmd = ["cmake", "--build", "build/android", "-j", "4"]
+    if verbose:
+        cmd.append("--verbose")
+
+    result = subprocess.run(cmd, cwd=project_root)
+    if result.returncode != 0:
+        print("Error: Android build failed")
+        return False
+
+    return True
+
+
+def build_for_qnx(
+    project_root, conan_dir, build_dir, build_type, arch=None, verbose=False
+):
+    """QNX platform build"""
+    print("Building QNX version...")
+
+    qnx_sdp_home = os.environ.get("QNX_SDP_HOME")
+    qnx_build_dir = build_dir / "qnx"
+    qnx_build_dir.mkdir(exist_ok=True)
+
+    # Default architecture
+    if not arch:
+        arch = "armv7"
+
+    # Use conanfile.py to install dependencies
+    cmd = [
+        "conan",
+        "install",
+        ".",
+        "--output-folder",
+        str(conan_dir),
+        "--build",
+        "missing",
+        "-s",
+        "os=Neutrino",
+        "-s",
+        f"arch={arch}",
+        "-s",
+        "compiler=qcc",
+        "-s",
+        "compiler.version=5.4",
+        "-s",
+        f"compiler.cppstd=17",
+    ]
+    if verbose:
+        cmd.append("--verbose")
+
+    result = subprocess.run(cmd, cwd=project_root)
+    if result.returncode != 0:
+        print("Error: Conan installation failed")
+        return False
+
+    # 配置QNX项目
+    cmd = [
+        "cmake",
+        "-S",
+        ".",
+        "-B",
+        "build/qnx",
+        f"-DCMAKE_TOOLCHAIN_FILE={qnx_sdp_home}/qnx710/cmake/toolchain.cmake",
+        f"-DCMAKE_BUILD_TYPE={build_type}",
+        "-DHUD_ENGINE_PLATFORM_QNX=ON",
+        "-DHUD_ENGINE_USE_EGL=ON",
+        f"-DCMAKE_PREFIX_PATH={conan_dir}",
+    ]
+
+    # 设置QNX架构特定的配置
+    if arch == "x86":
+        cmd.extend(["-DQNX_TARGET_CPU=x86"])
+    elif arch == "armv7":
+        cmd.extend(["-DQNX_TARGET_CPU=armv7"])
+    elif arch == "armv8":
+        cmd.extend(["-DQNX_TARGET_CPU=aarch64le"])
+
+    if verbose:
+        cmd.append("--verbose")
+
+    result = subprocess.run(cmd, cwd=project_root)
+    if result.returncode != 0:
+        print("Error: QNX CMake configuration failed")
+        return False
+
+    # Build QNX project
+    cmd = ["cmake", "--build", "build/qnx", "-j", "4"]
+    if verbose:
+        cmd.append("--verbose")
+
+    result = subprocess.run(cmd, cwd=project_root)
+    if result.returncode != 0:
+        print("Error: QNX build failed")
+        return False
+
+    return True
+
+
+def build_project(
+    target_platform=None, arch=None, clean=False, verbose=False, build_type="Release"
+):
+
+    project_root = Path(__file__).parent.absolute()
+    build_dir = project_root / "build"
+    conan_dir = project_root / "conan"
+
+    if not target_platform:
+        target_platform = detect_platform()
+
+    if not arch:
+        if target_platform == "windows":
+            arch = "x86_64"
+        elif target_platform == "linux":
+            arch = "x86_64"
+        elif target_platform == "android":
+            arch = "armv8"
+        elif target_platform == "qnx":
+            arch = "armv7"
+
+    print("=" * 60)
+    print("3D HUD Rendering Engine - Cross-Platform Build Script")
+    print("=" * 60)
+    print(f"Target platform: {target_platform}")
+    print(f"Target architecture: {arch}")
+    print(f"Build type: {build_type}")
+    print(f"Build directory: {build_dir}")
+    print(f"Conan directory: {conan_dir}")
+    print("-" * 60)
+
+    # fmt: off
+    if clean and build_dir.exists():
+        import shutil
+        shutil.rmtree(build_dir)
+        print("Cleaned old build directory")
+    if clean and conan_dir.exists():
+        import shutil
+        shutil.rmtree(conan_dir)
+        print("Cleaned old conan directory")
+    build_dir.mkdir(exist_ok=True)
+    conan_dir.mkdir(exist_ok=True)
+    # fmt: on
+
+    if target_platform == "windows":
+        success = build_for_windows(
+            project_root, conan_dir, build_dir, build_type, arch, verbose
+        )
+    elif target_platform == "linux":
+        success = build_for_linux(
+            project_root, conan_dir, build_dir, build_type, arch, verbose
+        )
+    elif target_platform == "android":
+        success = build_for_android(
+            project_root, conan_dir, build_dir, build_type, arch, verbose
+        )
+    elif target_platform == "qnx":
+        success = build_for_qnx(
+            project_root, conan_dir, build_dir, build_type, arch, verbose
+        )
+    else:
+        print(f"Error: Unsupported platform: {target_platform}")
+        return False
+
+    if success:
+        print("\n" + "=" * 60)
+        print("Build completed successfully!")
+        print("=" * 60)
+
+    return success
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="3D HUD Rendering Engine Cross-Platform Build Script"
+    )
+
+    parser.add_argument(
+        "--platform",
+        choices=["windows", "linux", "android", "qnx"],
+        help="Target platform (default: auto-detect)",
+    )
+    parser.add_argument(
+        "--arch",
+        choices=["x86", "x86_64", "armv7", "armv8"],
+        help="Target architecture (default: auto-selected based on platform)",
+    )
+    parser.add_argument(
+        "--build-type",
+        choices=["Debug", "Release", "RelWithDebInfo"],
+        default="Release",
+        help="Build type",
+    )
+    parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+    parser.add_argument("--clean", action="store_true", help="Clean build")
+
+    args = parser.parse_args()
+
+    if not check_prerequisites(args.platform):
+        sys.exit(1)
+
+    success = build_project(
+        target_platform=args.platform,
+        arch=args.arch,
+        clean=args.clean,
+        verbose=args.verbose,
+        build_type=args.build_type,
+    )
+
+    sys.exit(0 if success else 1)
+
+
+if __name__ == "__main__":
+    main()

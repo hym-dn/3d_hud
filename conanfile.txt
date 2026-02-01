@@ -1,0 +1,28 @@
+[requires]
+glad/2.0.8
+glm/1.0.1
+stb/cci.20240531
+fmt/12.0.0
+spdlog/1.16.0
+opengl/system
+gtest/1.17.0
+tracy/0.12.2
+# yoga/3.2.0
+
+[generators]
+CMakeDeps
+CMakeToolchain
+
+[options]
+# Default to static linking
+*:shared=False
+
+[layout]
+# Simple layout configuration
+cmake_layout
+
+[imports]
+# Copy any necessary runtime dependencies to bin directory
+bin, *.dll -> ./bin
+lib, *.dylib -> ./bin
+lib, *.so* -> ./bin
